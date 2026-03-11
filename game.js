@@ -46,11 +46,9 @@
     const joystickCanvas = document.getElementById('joystick-canvas');
     const jCtx = joystickCanvas.getContext('2d');
     const healthSpan = document.getElementById('health-display');
-    const coinSpan = document.getElementById('coin-display');
     const pauseBtn = document.getElementById('pause-btn');
     const pauseIcon = document.getElementById('pause-icon');
     const speedBtn = document.getElementById('speed-btn');
-    const coinRainBtn = document.getElementById('coin-rain-btn');
     const healthPanel = document.getElementById('health-panel');
 
     let gameWidth, gameHeight;
@@ -61,7 +59,8 @@
         radius: 14,
         hp: 90,
         maxHp: 90,
-        speed: 3.0 // уменьшена на 1.5 (было 4.5)
+        baseSpeed: 3.0,
+        speed: 3.0 // текущая скорость (может меняться в гендер-вики)
     };
 
     // Джойстик
@@ -81,15 +80,12 @@
     let enemies = [];
     let healers = [];
     let bouncers = [];
-    let coins = [];          // обычные монеты
-    let coinRainDrops = [];  // монеты во время дождя (наносят урон)
     let floatingTexts = [];
 
     // Настройки спавна
     const enemySpawnRate = 0.02;
     const bouncerSpawnRate = 0.005;
     const healerSpawnRate = 0.0024;
-    const coinSpawnRate = healerSpawnRate * 1.2; // 0.00288
     const baseSpeedMin = 2.5;
     const baseSpeedMax = 4.0;
     const enemyDamage = 7;
@@ -106,30 +102,21 @@
     const BOUNCER_RISE_SPEED_MULT = 1.5;
     const BOUNCER_ACCELERATION = 0.05;
 
-    // Скорость игры
-    const speedOptions = [0.7, 1.0, 1.3, 2.0];
+    // Скорость игры (множители)
+    const speedOptions = [0.5, 1.0, 2.0];
     let speedIndex = 1; // 1x по умолчанию
     let gameSpeed = speedOptions[speedIndex];
 
-    // Монеты
-    let coinCount = 0;
-
-    // Режим монетного дождя
-    let coinRainActive = false;
-    let coinRainTimer = 0;
-    let coinRainDuration = 0;
-    const COIN_RAIN_BASE_COST = 50;
-    const COIN_RAIN_BASE_TIME = 3; // секунды
-
     // Режим Гендер Вики
     let genderWikiActive = false;
-    let tapCount = 0;                // общие тапы
-    let tapMessageShown = false;     // показано ли "Тап тап тап"
-    let tapsAfterActivation = 0;     // тапы после активации (для отключения)
+    let tapCount = 0;
+    let tapMessageShown = false;
+    let tapsAfterActivation = 0;
 
-    // Флаги
+    // Флаги и таймеры
     let paused = false;
     let gameOver = false;
+    let respawnTimer = 0; // секунд до рестарта (отображается)
 
     // ---------- Инициализация и ресайз ----------
     function resizeGame() {
@@ -261,10 +248,6 @@
     }
 
     function spawnEnemy() {
-        if (coinRainActive) {
-            spawnCoinRainDrop();
-            return;
-        }
         const speed = (Math.random() * (baseSpeedMax - baseSpeedMin) + baseSpeedMin) * gameSpeed;
         enemies.push({
             x: getRandomX(14),
@@ -276,10 +259,6 @@
     }
 
     function spawnHealer() {
-        if (coinRainActive) {
-            spawnCoinRainDrop();
-            return;
-        }
         const speed = (Math.random() * (baseSpeedMax - baseSpeedMin) + baseSpeedMin) * gameSpeed;
         healers.push({
             x: getRandomX(12),
@@ -291,10 +270,6 @@
     }
 
     function spawnBouncer() {
-        if (coinRainActive) {
-            spawnCoinRainDrop();
-            return;
-        }
         const speed = (Math.random() * (baseSpeedMax - baseSpeedMin) + baseSpeedMin) * gameSpeed;
         bouncers.push({
             x: getRandomX(12),
@@ -312,32 +287,6 @@
         });
     }
 
-    function spawnCoin() {
-        if (coinRainActive) {
-            spawnCoinRainDrop();
-            return;
-        }
-        const speed = (Math.random() * (baseSpeedMax - baseSpeedMin) + baseSpeedMin) * gameSpeed;
-        coins.push({
-            x: getRandomX(10),
-            y: -20,
-            radius: 10,
-            speed: speed,
-            type: 'coin'
-        });
-    }
-
-    function spawnCoinRainDrop() {
-        const speed = (Math.random() * (baseSpeedMax - baseSpeedMin) + baseSpeedMin) * gameSpeed;
-        coinRainDrops.push({
-            x: getRandomX(10),
-            y: -20,
-            radius: 10,
-            speed: speed,
-            type: 'coinRain'
-        });
-    }
-
     // ---------- Обновление позиции игрока ----------
     function updatePlayerPosition() {
         player.x += joystick.dx * player.speed;
@@ -348,6 +297,8 @@
 
     // ---------- Проверка столкновений ----------
     function checkCollisions() {
+        if (gameOver) return; // при смерти не обрабатываем столкновения
+
         const playerRadius = player.radius;
 
         // Обычные враги
@@ -370,7 +321,10 @@
                     life: 120
                 });
                 enemies.splice(i, 1);
-                if (player.hp <= 0) gameOver = true;
+                if (player.hp <= 0) {
+                    gameOver = true;
+                    respawnTimer = 5; // 5 секунд до рестарта
+                }
             }
         }
 
@@ -406,13 +360,17 @@
                 healthSpan.innerText = player.hp;
                 updateHealthColor();
                 healers.splice(i, 1);
+                if (player.hp <= 0) {
+                    gameOver = true;
+                    respawnTimer = 5;
+                }
             }
         }
 
         // Bouncers
         for (let i = bouncers.length - 1; i >= 0; i--) {
             const b = bouncers[i];
-            const hitRadius = b.radius * HITBOX_SCALE * 1.2; // для эллипса
+            const hitRadius = b.radius * HITBOX_SCALE * 1.2;
             const dx = player.x - b.x;
             const dy = player.y - b.y;
             const dist = Math.sqrt(dx*dx + dy*dy);
@@ -421,16 +379,14 @@
                 if (genderWikiActive) {
                     damage = 1;
                 } else {
-                    // Урон зависит от состояния
                     if (b.state === 'falling2') {
-                        // ускоренная фаза
                         if (player.hp > player.maxHp * 0.3) {
-                            damage = Math.floor(Math.random() * (17 - 12 + 1)) + 12; // 12-17
+                            damage = Math.floor(Math.random() * (17 - 12 + 1)) + 12;
                         } else {
-                            damage = Math.floor(Math.random() * (8 - 6 + 1)) + 6; // 6-8
+                            damage = Math.floor(Math.random() * (8 - 6 + 1)) + 6;
                         }
                     } else {
-                        damage = 5; // фиксированный урон до ускорения
+                        damage = 5;
                     }
                 }
                 player.hp = Math.max(0, player.hp - damage);
@@ -444,52 +400,10 @@
                     life: 120
                 });
                 bouncers.splice(i, 1);
-                if (player.hp <= 0) gameOver = true;
-            }
-        }
-
-        // Обычные монеты (сбор)
-        for (let i = coins.length - 1; i >= 0; i--) {
-            const c = coins[i];
-            const hitRadius = c.radius * HITBOX_SCALE;
-            const dx = player.x - c.x;
-            const dy = player.y - c.y;
-            const dist = Math.sqrt(dx*dx + dy*dy);
-            if (dist < playerRadius + hitRadius) {
-                coinCount++;
-                coinSpan.innerText = coinCount;
-                floatingTexts.push({
-                    x: player.x,
-                    y: player.y - 20,
-                    text: '+1',
-                    color: '#ffd966',
-                    life: 60
-                });
-                coins.splice(i, 1);
-            }
-        }
-
-        // Монеты дождя (наносят урон)
-        for (let i = coinRainDrops.length - 1; i >= 0; i--) {
-            const cr = coinRainDrops[i];
-            const hitRadius = cr.radius * HITBOX_SCALE;
-            const dx = player.x - cr.x;
-            const dy = player.y - cr.y;
-            const dist = Math.sqrt(dx*dx + dy*dy);
-            if (dist < playerRadius + hitRadius) {
-                let damage = genderWikiActive ? 1 : 3;
-                player.hp = Math.max(0, player.hp - damage);
-                healthSpan.innerText = player.hp;
-                updateHealthColor();
-                floatingTexts.push({
-                    x: player.x,
-                    y: player.y - 20,
-                    text: `-${damage}`,
-                    color: '#ff6b6b',
-                    life: 120
-                });
-                coinRainDrops.splice(i, 1);
-                if (player.hp <= 0) gameOver = true;
+                if (player.hp <= 0) {
+                    gameOver = true;
+                    respawnTimer = 5;
+                }
             }
         }
     }
@@ -540,16 +454,6 @@
             }
         }
         bouncers = bouncers.filter(b => b.y - b.radius < gameHeight + 30);
-
-        for (let c of coins) {
-            c.y += c.speed;
-        }
-        coins = coins.filter(c => c.y - c.radius < gameHeight + 30);
-
-        for (let cr of coinRainDrops) {
-            cr.y += cr.speed;
-        }
-        coinRainDrops = coinRainDrops.filter(cr => cr.y - cr.radius < gameHeight + 30);
     }
 
     // ---------- Обновление текстов ----------
@@ -642,17 +546,7 @@
             drawObject(b.x, b.y, b.radius, '#ff8c42', true);
         }
 
-        // Обычные монеты
-        for (let c of coins) {
-            drawObject(c.x, c.y, c.radius, '#ffd966');
-        }
-
-        // Монеты дождя
-        for (let cr of coinRainDrops) {
-            drawObject(cr.x, cr.y, cr.radius, '#ffaa00');
-        }
-
-        // Тексты
+        // Тексты (включая пасхальные и паузу)
         for (let t of floatingTexts) {
             ctx.font = 'bold 22px -apple-system, BlinkMacSystemFont, sans-serif';
             ctx.fillStyle = t.color;
@@ -665,20 +559,22 @@
         ctx.shadowColor = 'transparent';
         ctx.globalAlpha = 1.0;
 
-        // Состояния игры
+        // Состояния игры (центрированные надписи)
+        ctx.textAlign = 'center';
         if (gameOver) {
-            ctx.font = 'bold 40px -apple-system, sans-serif';
+            // Отображаем "Вы умер" и таймер респавна
+            ctx.font = 'bold 36px -apple-system, sans-serif';
             ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-primary').trim() || '#1a1a2e';
             ctx.shadowColor = ctx.fillStyle;
             ctx.shadowBlur = 10;
-            ctx.textAlign = 'center';
-            ctx.fillText('GAME OVER', gameWidth/2, gameHeight/2);
+            ctx.fillText('Вы умер', gameWidth/2, gameHeight/2 - 30);
+            ctx.font = 'bold 48px -apple-system, sans-serif';
+            ctx.fillText(Math.ceil(respawnTimer), gameWidth/2, gameHeight/2 + 30);
         } else if (paused) {
             ctx.font = 'bold 40px -apple-system, sans-serif';
             ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-primary').trim() || '#1a1a2e';
             ctx.shadowColor = ctx.fillStyle;
             ctx.shadowBlur = 10;
-            ctx.textAlign = 'center';
             ctx.fillText('ПАУЗА', gameWidth/2, gameHeight/2);
         }
         ctx.shadowBlur = 0;
@@ -692,21 +588,34 @@
             if (Math.random() < enemySpawnRate * gameSpeed) spawnEnemy();
             if (Math.random() < bouncerSpawnRate * gameSpeed) spawnBouncer();
             if (Math.random() < healerSpawnRate * gameSpeed) spawnHealer();
-            if (Math.random() < coinSpawnRate * gameSpeed) spawnCoin();
-
-            // Обновление таймера монетного дождя
-            if (coinRainActive) {
-                coinRainTimer--;
-                if (coinRainTimer <= 0) {
-                    coinRainActive = false;
-                    coinRainDrops = []; // очищаем
-                }
-            }
 
             updatePlayerPosition();
             updateObjects();
             checkCollisions();
             updateFloatingTexts();
+        } else if (gameOver) {
+            // Обратный отсчёт респавна
+            respawnTimer -= 1/60; // приблизительно 60 кадров в секунду
+            if (respawnTimer <= 0) {
+                // Рестарт
+                player.hp = player.maxHp;
+                healthSpan.innerText = player.hp;
+                updateHealthColor();
+                enemies = [];
+                healers = [];
+                bouncers = [];
+                floatingTexts = [];
+                gameOver = false;
+                // Сброс режима гендер вики, если активен
+                if (genderWikiActive) {
+                    genderWikiActive = false;
+                    player.maxHp = 90;
+                    if (player.hp > 90) player.hp = 90;
+                    healthSpan.innerText = player.hp;
+                    updateHealthColor();
+                    player.speed = player.baseSpeed; // восстанавливаем скорость
+                }
+            }
         }
 
         drawGame();
@@ -718,33 +627,27 @@
     // ---------- Пауза ----------
     pauseBtn.addEventListener('click', () => {
         if (gameOver) {
-            // Рестарт
+            // Принудительный рестарт (кнопка паузы работает как рестарт после смерти)
             player.hp = player.maxHp;
             healthSpan.innerText = player.hp;
             updateHealthColor();
             enemies = [];
             healers = [];
             bouncers = [];
-            coins = [];
-            coinRainDrops = [];
             floatingTexts = [];
-            coinRainActive = false;
             gameOver = false;
-            paused = false;
-            // Сброс режима гендер вики, если активен
             if (genderWikiActive) {
                 genderWikiActive = false;
                 player.maxHp = 90;
                 if (player.hp > 90) player.hp = 90;
                 healthSpan.innerText = player.hp;
                 updateHealthColor();
+                player.speed = player.baseSpeed;
             }
         } else {
             paused = !paused;
             if (paused) {
-                // При паузе убираем все временные сообщения
-                floatingTexts = floatingTexts.filter(t => t.life < 0); // оставляем только паузу?
-                // Но мы добавим специальное сообщение паузы, поэтому просто очистим
+                // Убираем временные сообщения при паузе
                 floatingTexts = [];
             }
         }
@@ -758,22 +661,9 @@
         speedBtn.textContent = `x${gameSpeed}`;
     });
 
-    // ---------- Монетный дождь ----------
-    coinRainBtn.addEventListener('click', () => {
-        if (coinCount < COIN_RAIN_BASE_COST) return; // недостаточно монет
-        let spend = Math.floor(coinCount / COIN_RAIN_BASE_COST) * COIN_RAIN_BASE_COST;
-        coinCount -= spend;
-        coinSpan.innerText = coinCount;
-        let duration = COIN_RAIN_BASE_TIME + (spend / COIN_RAIN_BASE_COST - 1) * 1; // +1 сек за каждые 50 сверх первых
-        coinRainActive = true;
-        coinRainTimer = duration * 60; // 60 fps
-        // Очищаем предыдущие капли дождя
-        coinRainDrops = [];
-    });
-
     // ---------- Тапы по иконке здоровья (пасхалки) ----------
     healthPanel.addEventListener('click', () => {
-        if (paused || gameOver) return; // не считаем тапы в паузе или гейм овере
+        if (paused || gameOver) return;
         tapCount++;
 
         // 10 тапов: показать "Тап тап тап" (один раз)
@@ -793,6 +683,7 @@
             genderWikiActive = true;
             player.maxHp = 160;
             player.hp = 160;
+            player.speed = player.baseSpeed * 1.85; // увеличение скорости на 85%
             healthSpan.innerText = player.hp;
             updateHealthColor();
             floatingTexts.push({
@@ -802,7 +693,7 @@
                 color: '#ffd700',
                 life: 240
             });
-            tapsAfterActivation = 0; // сбрасываем счетчик для отключения
+            tapsAfterActivation = 0;
         }
 
         // Если режим активен, считаем тапы для отключения
@@ -814,6 +705,7 @@
                 if (player.hp > 90) player.hp = 90;
                 healthSpan.innerText = player.hp;
                 updateHealthColor();
+                player.speed = player.baseSpeed;
                 floatingTexts.push({
                     x: gameWidth / 2,
                     y: gameHeight / 2,
