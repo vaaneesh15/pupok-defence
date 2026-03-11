@@ -46,18 +46,17 @@
     const pauseBtn = document.getElementById('pause-btn');
     const pauseIcon = document.getElementById('pause-icon');
 
-    // Размеры игрового поля (будут установлены после изменения размера)
     let gameWidth, gameHeight;
 
-    // Параметры игрока
+    // Параметры игрока (уменьшен)
     const player = {
         x: 0, y: 0,
-        radius: 25,
+        radius: 18,
         hp: 90,
         maxHp: 90
     };
 
-    // Управление джойстиком
+    // Джойстик (без изменений)
     const joystick = {
         centerX: 100,
         centerY: 100,
@@ -71,25 +70,31 @@
     };
 
     // Массивы объектов
-    let enemies = [];        // враги (красные)
+    let enemies = [];        // обычные враги (красные)
     let healers = [];        // лекари (зелёные)
-    let floatingTexts = [];  // тексты (+15, -7 и т.д.)
+    let bouncers = [];       // новые враги (с возвратом)
+    let floatingTexts = [];
 
     // Настройки спавна
-    const enemySpawnRate = 0.02;     // вероятность спавна врага за кадр
-    const healerSpawnRate = 0.003;   // вероятность спавна лекаря за кадр
-    const enemySpeed = 2;
-    const healerSpeed = 2;
+    const enemySpawnRate = 0.02;     // обычные враги
+    const bouncerSpawnRate = 0.005;  // новые враги (реже)
+    const healerSpawnRate = 0.0024;   // снижена на 20% (было 0.003)
+    const baseSpeed = 2;
     const enemyDamage = 7;
     const healerMinHeal = 15;
     const healerMaxHeal = 19;
 
+    // Параметры для нового врага
+    const BOUNCER_FALL_DISTANCE = 0.15; // 15% высоты экрана
+    const BOUNCER_RISE_DISTANCE = 0.07; // 7% высоты
+    const BOUNCER_WAIT_TIME = 90;       // 1.5 сек при 60fps = 90 кадров
+    const BOUNCER_RISE_SPEED_MULT = 1.5; // увеличение скорости на 50%
+
     // Флаги
     let paused = false;
     let gameOver = false;
-    let gameLoopId = null;
 
-    // ---------- Функции инициализации и изменения размера ----------
+    // ---------- Инициализация и ресайз ----------
     function resizeGame() {
         const gameArea = document.querySelector('.game-area');
         const rect = gameArea.getBoundingClientRect();
@@ -98,7 +103,6 @@
         canvas.width = gameWidth;
         canvas.height = gameHeight;
 
-        // Позиционируем игрока по центру внизу, но над джойстиком
         player.x = gameWidth / 2;
         player.y = gameHeight - 80;
     }
@@ -106,10 +110,9 @@
     window.addEventListener('resize', resizeGame);
     resizeGame();
 
-    // ---------- Джойстик: рисование и события ----------
+    // ---------- Джойстик (без изменений) ----------
     function drawJoystick() {
         jCtx.clearRect(0, 0, 200, 200);
-        // База
         jCtx.beginPath();
         jCtx.arc(joystick.centerX, joystick.centerY, joystick.baseRadius, 0, 2 * Math.PI);
         jCtx.fillStyle = 'rgba(255,255,255,0.2)';
@@ -118,18 +121,15 @@
         jCtx.lineWidth = 3;
         jCtx.stroke();
 
-        // Ручка
         jCtx.beginPath();
         jCtx.arc(joystick.handleX, joystick.handleY, joystick.handleRadius, 0, 2 * Math.PI);
         jCtx.fillStyle = getComputedStyle(document.body).getPropertyValue('--joystick-handle').trim() || '#4a3aff';
-        jCtx.fill();
         jCtx.shadowColor = 'rgba(0,0,0,0.3)';
         jCtx.shadowBlur = 10;
         jCtx.fill();
         jCtx.shadowBlur = 0;
     }
 
-    // Обработка касаний/мыши на джойстике
     function handleJoystickStart(e) {
         e.preventDefault();
         const rect = joystickCanvas.getBoundingClientRect();
@@ -145,11 +145,10 @@
         }
         const canvasX = (clientX - rect.left) * scaleX;
         const canvasY = (clientY - rect.top) * scaleY;
-        // Проверяем, попали ли в область ручки или базы
         const dx = canvasX - joystick.centerX;
         const dy = canvasY - joystick.centerY;
         const dist = Math.sqrt(dx*dx + dy*dy);
-        if (dist <= joystick.baseRadius + 20) { // захватываем если рядом
+        if (dist <= joystick.baseRadius + 20) {
             joystick.active = true;
             updateJoystickPosition(canvasX, canvasY);
         }
@@ -175,7 +174,6 @@
     }
 
     function updateJoystickPosition(x, y) {
-        // Ограничиваем расстояние от центра радиусом базы
         let dx = x - joystick.centerX;
         let dy = y - joystick.centerY;
         const dist = Math.sqrt(dx*dx + dy*dy);
@@ -186,7 +184,6 @@
         }
         joystick.handleX = joystick.centerX + dx;
         joystick.handleY = joystick.centerY + dy;
-        // Сохраняем нормализованное направление
         if (dist > 1) {
             joystick.dx = dx / maxDist;
             joystick.dy = dy / maxDist;
@@ -216,66 +213,80 @@
 
     drawJoystick();
 
-    // ---------- Игровая логика ----------
+    // ---------- Функции спавна ----------
+    function getRandomX() {
+        // Возвращает координату x, которая может быть за пределами экрана (для спавна под углом)
+        const margin = 40;
+        return Math.random() * (gameWidth + 2 * margin) - margin;
+    }
+
     function spawnEnemy() {
-        const x = Math.random() * (gameWidth - 40) + 20;
         enemies.push({
-            x: x,
-            y: 20,
-            radius: 18,
-            speed: enemySpeed,
+            x: getRandomX(),
+            y: -20, // выше верхней границы
+            radius: 14,  // уменьшен
+            speed: baseSpeed,
             type: 'enemy'
         });
     }
 
     function spawnHealer() {
-        const x = Math.random() * (gameWidth - 30) + 15;
         healers.push({
-            x: x,
-            y: 20,
-            radius: 15,
-            speed: healerSpeed,
+            x: getRandomX(),
+            y: -20,
+            radius: 12,  // уменьшен
+            speed: baseSpeed,
             type: 'healer'
         });
     }
 
+    function spawnBouncer() {
+        bouncers.push({
+            x: getRandomX(),
+            y: -20,
+            radius: 14,
+            speed: baseSpeed,
+            type: 'bouncer',
+            state: 'falling',      // falling, waiting, rising, falling2
+            waitTimer: 0,
+            riseDistance: 0,
+            startY: 0,              // Y, на котором начал ожидание
+            trail: []               // для эффекта следа (сохраняем предыдущие позиции)
+        });
+    }
+
+    // ---------- Обновление позиции игрока ----------
     function updatePlayerPosition() {
-        // Скорость движения игрока
         const speed = 5;
         player.x += joystick.dx * speed;
         player.y += joystick.dy * speed;
-        // Ограничение в пределах canvas с учётом радиуса
         player.x = Math.max(player.radius, Math.min(gameWidth - player.radius, player.x));
         player.y = Math.max(player.radius, Math.min(gameHeight - player.radius, player.y));
     }
 
+    // ---------- Проверка столкновений ----------
     function checkCollisions() {
-        // Враги
+        // Обычные враги
         for (let i = enemies.length - 1; i >= 0; i--) {
             const e = enemies[i];
             const dx = player.x - e.x;
             const dy = player.y - e.y;
             const dist = Math.sqrt(dx*dx + dy*dy);
             if (dist < player.radius + e.radius) {
-                // Урон
                 player.hp = Math.max(0, player.hp - enemyDamage);
                 healthSpan.innerText = player.hp;
-                // Создаём текстовый эффект
                 floatingTexts.push({
                     x: player.x,
                     y: player.y - 20,
                     text: `-${enemyDamage}`,
                     color: '#ff6b6b',
-                    life: 120 // кадров (2 сек при 60 fps)
+                    life: 120
                 });
-                // Удаляем врага
                 enemies.splice(i, 1);
-                if (player.hp <= 0) {
-                    gameOver = true;
-                    paused = true; // останавливаем игру
-                }
+                if (player.hp <= 0) gameOver = true;
             }
         }
+
         // Лекари
         for (let i = healers.length - 1; i >= 0; i--) {
             const h = healers[i];
@@ -283,7 +294,6 @@
             const dy = player.y - h.y;
             const dist = Math.sqrt(dx*dx + dy*dy);
             if (dist < player.radius + h.radius) {
-                // Лечение
                 const healAmount = Math.floor(Math.random() * (healerMaxHeal - healerMinHeal + 1)) + healerMinHeal;
                 player.hp = Math.min(player.maxHp, player.hp + healAmount);
                 healthSpan.innerText = player.hp;
@@ -297,78 +307,148 @@
                 healers.splice(i, 1);
             }
         }
+
+        // Новые враги (bouncers)
+        for (let i = bouncers.length - 1; i >= 0; i--) {
+            const b = bouncers[i];
+            const dx = player.x - b.x;
+            const dy = player.y - b.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            if (dist < player.radius + b.radius) {
+                player.hp = Math.max(0, player.hp - enemyDamage);
+                healthSpan.innerText = player.hp;
+                floatingTexts.push({
+                    x: player.x,
+                    y: player.y - 20,
+                    text: `-${enemyDamage}`,
+                    color: '#ff6b6b',
+                    life: 120
+                });
+                bouncers.splice(i, 1);
+                if (player.hp <= 0) gameOver = true;
+            }
+        }
     }
 
+    // ---------- Обновление объектов ----------
+    function updateObjects() {
+        // Обычные враги
+        for (let e of enemies) {
+            e.y += e.speed;
+            // Обновляем след (для единообразия можно не делать след у обычных)
+        }
+        enemies = enemies.filter(e => e.y - e.radius < gameHeight + 30); // уходят за нижнюю панель
+
+        // Лекари
+        for (let h of healers) {
+            h.y += h.speed;
+        }
+        healers = healers.filter(h => h.y - h.radius < gameHeight + 30);
+
+        // Новые враги
+        for (let b of bouncers) {
+            // Сохраняем предыдущие позиции для следа (максимум 5)
+            b.trail.push({ x: b.x, y: b.y });
+            if (b.trail.length > 5) b.trail.shift();
+
+            switch (b.state) {
+                case 'falling':
+                    b.y += b.speed;
+                    // Проверяем, пройдено ли 15% высоты
+                    if (b.y - b.startY > gameHeight * BOUNCER_FALL_DISTANCE) {
+                        b.state = 'waiting';
+                        b.waitTimer = BOUNCER_WAIT_TIME;
+                        b.riseDistance = gameHeight * BOUNCER_RISE_DISTANCE;
+                    }
+                    break;
+                case 'waiting':
+                    b.waitTimer--;
+                    if (b.waitTimer <= 0) {
+                        b.state = 'rising';
+                    }
+                    break;
+                case 'rising':
+                    b.y -= b.speed * BOUNCER_RISE_SPEED_MULT;
+                    // Проверяем, поднялся ли на нужное расстояние
+                    if (b.startY - b.y > b.riseDistance) {
+                        b.state = 'falling2';
+                    }
+                    break;
+                case 'falling2':
+                    b.y += b.speed;
+                    break;
+            }
+        }
+        bouncers = bouncers.filter(b => b.y - b.radius < gameHeight + 30);
+    }
+
+    // ---------- Обновление текстов ----------
     function updateFloatingTexts() {
         for (let i = floatingTexts.length - 1; i >= 0; i--) {
             floatingTexts[i].life--;
             if (floatingTexts[i].life <= 0) {
                 floatingTexts.splice(i, 1);
             } else {
-                // поднимаем чуть вверх
                 floatingTexts[i].y -= 0.5;
             }
         }
     }
 
-    function updateObjects() {
-        // Двигаем врагов вниз
-        for (let e of enemies) {
-            e.y += e.speed;
-        }
-        // Двигаем лекарей вниз
-        for (let h of healers) {
-            h.y += h.speed;
-        }
-        // Удаляем улетевшие за экран
-        enemies = enemies.filter(e => e.y - e.radius < gameHeight);
-        healers = healers.filter(h => h.y - h.radius < gameHeight);
-    }
-
-    // ---------- Отрисовка ----------
+    // ---------- Отрисовка с обводкой ----------
     function drawGame() {
         ctx.clearRect(0, 0, gameWidth, gameHeight);
 
-        // Игрок
-        ctx.beginPath();
-        ctx.arc(player.x, player.y, player.radius, 0, 2 * Math.PI);
-        ctx.fillStyle = '#4a3aff';
-        ctx.shadowColor = 'rgba(74,58,255,0.5)';
-        ctx.shadowBlur = 15;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        // Враги
-        for (let e of enemies) {
+        // Функция для рисования объекта с обводкой
+        function drawObject(x, y, radius, color, strokeColor = '#ffffff', strokeWidth = 2) {
             ctx.beginPath();
-            ctx.arc(e.x, e.y, e.radius, 0, 2 * Math.PI);
-            ctx.fillStyle = '#ff6b6b';
-            ctx.shadowColor = 'rgba(255,107,107,0.5)';
+            ctx.arc(x, y, radius, 0, 2 * Math.PI);
+            ctx.fillStyle = color;
+            ctx.shadowColor = 'rgba(0,0,0,0.3)';
             ctx.shadowBlur = 10;
             ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = strokeColor;
+            ctx.lineWidth = strokeWidth;
+            ctx.stroke();
+        }
+
+        // Игрок
+        drawObject(player.x, player.y, player.radius, '#4a3aff', '#ffffff', 2.5);
+
+        // Обычные враги
+        for (let e of enemies) {
+            drawObject(e.x, e.y, e.radius, '#ff6b6b', '#ffffff', 2);
         }
 
         // Лекари
         for (let h of healers) {
-            ctx.beginPath();
-            ctx.arc(h.x, h.y, h.radius, 0, 2 * Math.PI);
-            ctx.fillStyle = '#2ecc71';
-            ctx.shadowColor = 'rgba(46,204,113,0.5)';
-            ctx.shadowBlur = 10;
-            ctx.fill();
+            drawObject(h.x, h.y, h.radius, '#2ecc71', '#ffffff', 2);
         }
-        ctx.shadowBlur = 0;
 
-        // Тексты (урон/лечение)
+        // Новые враги с эффектом следа
+        for (let b of bouncers) {
+            // Рисуем след
+            for (let i = 0; i < b.trail.length; i++) {
+                const t = b.trail[i];
+                const alpha = 0.3 * (i / b.trail.length); // прозрачность увеличивается к началу
+                ctx.globalAlpha = alpha;
+                drawObject(t.x, t.y, b.radius, '#ff6b6b', '#ffffff', 1);
+            }
+            ctx.globalAlpha = 1.0;
+            // Сам объект
+            drawObject(b.x, b.y, b.radius, '#ff6b6b', '#ffffff', 2);
+        }
+
+        // Тексты урона/лечения
         for (let t of floatingTexts) {
-            ctx.font = 'bold 24px -apple-system, BlinkMacSystemFont, sans-serif';
+            ctx.font = 'bold 22px -apple-system, BlinkMacSystemFont, sans-serif';
             ctx.fillStyle = t.color;
-            ctx.globalAlpha = t.life / 120; // затухание
+            ctx.globalAlpha = t.life / 120;
             ctx.fillText(t.text, t.x - 20, t.y);
         }
         ctx.globalAlpha = 1.0;
 
-        // Если game over
+        // Game over / пауза
         if (gameOver) {
             ctx.font = 'bold 40px -apple-system, sans-serif';
             ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-primary').trim() || '#1a1a2e';
@@ -388,6 +468,7 @@
         if (!paused && !gameOver) {
             // Спавн
             if (Math.random() < enemySpawnRate) spawnEnemy();
+            if (Math.random() < bouncerSpawnRate) spawnBouncer();
             if (Math.random() < healerSpawnRate) spawnHealer();
 
             updatePlayerPosition();
@@ -400,17 +481,17 @@
         requestAnimationFrame(gameLoop);
     }
 
-    // Запуск цикла
     gameLoop();
 
     // ---------- Пауза ----------
     pauseBtn.addEventListener('click', () => {
         if (gameOver) {
-            // Перезапуск игры
+            // Рестарт
             player.hp = player.maxHp;
             healthSpan.innerText = player.hp;
             enemies = [];
             healers = [];
+            bouncers = [];
             floatingTexts = [];
             gameOver = false;
             paused = false;
@@ -419,18 +500,6 @@
         }
         pauseIcon.className = paused ? 'fas fa-play' : 'fas fa-pause';
     });
-
-    // Если игра закончилась, показываем кнопку паузы как рестарт
-    function checkGameOver() {
-        if (gameOver) {
-            pauseIcon.className = 'fas fa-undo-alt'; // иконка перезапуска
-        } else {
-            pauseIcon.className = paused ? 'fas fa-play' : 'fas fa-pause';
-        }
-    }
-
-    // Дополнительно обновляем иконку паузы при gameOver
-    setInterval(checkGameOver, 100); // или можно вызывать при изменении gameOver
 
     // ---------- Service Worker (опционально) ----------
     if ('serviceWorker' in navigator) {
