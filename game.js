@@ -27,8 +27,10 @@
             themeColorMeta.setAttribute('content', isDark ? '#1a1a2e' : '#4a3aff');
         }
 
-        // Важно: перерисовываем джойстик, чтобы его цвет обновился
-        drawJoystick();
+        // Перерисовываем джойстик при смене темы
+        if (typeof drawJoystick === 'function') {
+            drawJoystick();
+        }
     }
 
     themeToggle.addEventListener('click', () => {
@@ -38,7 +40,6 @@
     });
 
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
-    applyTheme();
 
     // ---------- Игровые переменные ----------
     const canvas = document.getElementById('game-canvas');
@@ -51,15 +52,15 @@
 
     let gameWidth, gameHeight;
 
-    // Параметры игрока (уменьшен до 14)
+    // Параметры игрока (маленький)
     const player = {
         x: 0, y: 0,
-        radius: 14,          // <-- было 18, теперь 14
+        radius: 14,
         hp: 90,
         maxHp: 90
     };
 
-    // Джойстик (без изменений)
+    // Джойстик
     const joystick = {
         centerX: 100,
         centerY: 100,
@@ -73,9 +74,9 @@
     };
 
     // Массивы объектов
-    let enemies = [];        // обычные враги (красные)
-    let healers = [];        // лекари (зелёные)
-    let bouncers = [];       // новые враги (с возвратом)
+    let enemies = [];
+    let healers = [];
+    let bouncers = [];
     let floatingTexts = [];
 
     // Настройки спавна
@@ -97,9 +98,10 @@
     let paused = false;
     let gameOver = false;
 
-    // ---------- Инициализация и ресайз ----------
+    // ---------- Функции инициализации и ресайза ----------
     function resizeGame() {
         const gameArea = document.querySelector('.game-area');
+        if (!gameArea) return;
         const rect = gameArea.getBoundingClientRect();
         gameWidth = rect.width;
         gameHeight = rect.height;
@@ -110,10 +112,16 @@
         player.y = gameHeight - 80;
     }
 
-    window.addEventListener('resize', resizeGame);
-    resizeGame();
+    // Вызываем resize после загрузки страницы
+    window.addEventListener('load', () => {
+        resizeGame();
+        drawJoystick();
+        applyTheme();
+    });
 
-    // ---------- Джойстик (с обновлением цвета) ----------
+    window.addEventListener('resize', resizeGame);
+
+    // ---------- Джойстик ----------
     function drawJoystick() {
         jCtx.clearRect(0, 0, 200, 200);
         // База
@@ -216,8 +224,6 @@
     window.addEventListener('mousemove', handleJoystickMove);
     window.addEventListener('mouseup', handleJoystickEnd);
 
-    drawJoystick();
-
     // ---------- Функции спавна ----------
     function getRandomX() {
         const margin = 40;
@@ -259,7 +265,7 @@
         });
     }
 
-    // ---------- Обновление позиции игрока ----------
+    // ---------- Обновление ----------
     function updatePlayerPosition() {
         const speed = 5;
         player.x += joystick.dx * speed;
@@ -268,7 +274,6 @@
         player.y = Math.max(player.radius, Math.min(gameHeight - player.radius, player.y));
     }
 
-    // ---------- Проверка столкновений ----------
     function checkCollisions() {
         for (let i = enemies.length - 1; i >= 0; i--) {
             const e = enemies[i];
@@ -331,7 +336,6 @@
         }
     }
 
-    // ---------- Обновление объектов ----------
     function updateObjects() {
         for (let e of enemies) {
             e.y += e.speed;
@@ -376,7 +380,6 @@
         bouncers = bouncers.filter(b => b.y - b.radius < gameHeight + 30);
     }
 
-    // ---------- Обновление текстов ----------
     function updateFloatingTexts() {
         for (let i = floatingTexts.length - 1; i >= 0; i--) {
             floatingTexts[i].life--;
@@ -388,8 +391,10 @@
         }
     }
 
-    // ---------- Отрисовка с обводкой ----------
+    // ---------- Отрисовка ----------
     function drawGame() {
+        if (!ctx || !gameWidth || !gameHeight) return;
+
         ctx.clearRect(0, 0, gameWidth, gameHeight);
 
         function drawObject(x, y, radius, color, strokeColor = '#ffffff', strokeWidth = 2) {
@@ -408,14 +413,17 @@
         // Игрок
         drawObject(player.x, player.y, player.radius, '#4a3aff', '#ffffff', 2.5);
 
+        // Обычные враги
         for (let e of enemies) {
             drawObject(e.x, e.y, e.radius, '#ff6b6b', '#ffffff', 2);
         }
 
+        // Лекари
         for (let h of healers) {
             drawObject(h.x, h.y, h.radius, '#2ecc71', '#ffffff', 2);
         }
 
+        // Новые враги со следом
         for (let b of bouncers) {
             for (let i = 0; i < b.trail.length; i++) {
                 const t = b.trail[i];
@@ -427,6 +435,7 @@
             drawObject(b.x, b.y, b.radius, '#ff6b6b', '#ffffff', 2);
         }
 
+        // Тексты
         for (let t of floatingTexts) {
             ctx.font = 'bold 22px -apple-system, BlinkMacSystemFont, sans-serif';
             ctx.fillStyle = t.color;
@@ -435,6 +444,7 @@
         }
         ctx.globalAlpha = 1.0;
 
+        // Состояния игры
         if (gameOver) {
             ctx.font = 'bold 40px -apple-system, sans-serif';
             ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-primary').trim() || '#1a1a2e';
@@ -451,7 +461,7 @@
 
     // ---------- Игровой цикл ----------
     function gameLoop() {
-        if (!paused && !gameOver) {
+        if (!paused && !gameOver && gameWidth && gameHeight) {
             if (Math.random() < enemySpawnRate) spawnEnemy();
             if (Math.random() < bouncerSpawnRate) spawnBouncer();
             if (Math.random() < healerSpawnRate) spawnHealer();
@@ -485,6 +495,7 @@
         pauseIcon.className = paused ? 'fas fa-play' : 'fas fa-pause';
     });
 
+    // ---------- Service Worker ----------
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
             navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW not registered'));
