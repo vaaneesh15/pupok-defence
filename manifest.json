@@ -2,7 +2,7 @@
   "name": "Bounce.io",
   "short_name": "Bounce.io",
   "description": "Игра про уворачивание",
-  "start_url": "/pupok-defence/",
+  "start_url": "/bounce-io/",
   "display": "standalone",
   "background_color": "#1a1a2e",
   "theme_color": "#4a3aff",
